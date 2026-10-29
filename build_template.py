@@ -86,8 +86,44 @@ template = {
                 "InvokedViaFunctionUrl": True,
             },
         },
+        # Weekday warm-up: invokes the function with a /health event at 6:30 America/Chicago
+        # (11:30 UTC in daylight time, 12:30 UTC in standard time), five minutes before the
+        # 6:35 CT scheduled task, so the task's first MCP call lands on a warm environment.
+        # EventBridge Scheduler (not an EventBridge rule) because rules only take UTC cron and
+        # would drift an hour off the task at each DST change.
+        "FredWarmupRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {"Version": "2012-10-17", "Statement": [
+                    {"Effect": "Allow", "Principal": {"Service": "scheduler.amazonaws.com"}, "Action": "sts:AssumeRole",
+                     "Condition": {"StringEquals": {"aws:SourceAccount": {"Ref": "AWS::AccountId"}}}}]},
+                "Policies": [{"PolicyName": "fred-mcp-warmup-invoke", "PolicyDocument": {
+                    "Version": "2012-10-17", "Statement": [
+                        {"Effect": "Allow", "Action": "lambda:InvokeFunction",
+                         "Resource": {"Fn::GetAtt": ["FredFunction", "Arn"]}}]}}],
+            },
+        },
+        "FredWarmupSchedule": {
+            "Type": "AWS::Scheduler::Schedule",
+            "Properties": {
+                "Name": "fred-mcp-warmup",
+                "Description": "Weekday /health invoke before the 6:35 CT morning brief so the function is warm",
+                "ScheduleExpression": "cron(30 6 ? * MON-FRI *)",
+                "ScheduleExpressionTimezone": "America/Chicago",
+                "FlexibleTimeWindow": {"Mode": "OFF"},
+                "State": "ENABLED",
+                "Target": {
+                    "Arn": {"Fn::GetAtt": ["FredFunction", "Arn"]},
+                    "RoleArn": {"Fn::GetAtt": ["FredWarmupRole", "Arn"]},
+                    "Input": json.dumps({"rawPath": "/health", "requestContext": {"http": {"method": "GET"}},
+                                         "headers": {"user-agent": "eventbridge-scheduler-warmup"}}),
+                    "RetryPolicy": {"MaximumRetryAttempts": 2, "MaximumEventAgeInSeconds": 240},
+                },
+            },
+        },
     },
     "Outputs": {
+        "WarmupSchedule": {"Value": {"Ref": "FredWarmupSchedule"}},
         "FunctionUrl": {"Value": {"Fn::GetAtt": ["FredUrl", "FunctionUrl"]}},
         "SecretArn": {"Value": {"Ref": "FredSecret"}},
     },

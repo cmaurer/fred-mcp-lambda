@@ -333,6 +333,21 @@ def _http(status, body=None, extra_headers=None):
     return resp
 
 
+def _health():
+    """Unauthenticated readiness probe, also the target of the weekday warm-up schedule.
+
+    Does the same cold-start work as a real MCP request -- module imports, importing boto3,
+    creating the Secrets Manager client and loading the secret -- so the execution environment
+    it runs in is ready for the scheduled task's first call. Returns no data beyond ok/not ok.
+    """
+    try:
+        _get_secret()
+    except Exception:  # noqa: BLE001
+        log.exception("health: secret load failed")
+        return _http(503, {"ok": False})
+    return _http(200, {"ok": True})
+
+
 def _authorized(headers):
     supplied = headers.get("authorization", "")
     if not supplied.lower().startswith("bearer "):
@@ -350,6 +365,8 @@ def handler(event, context):
     # No OAuth here; let discovery probes fail fast instead of looking like auth challenges.
     if path.startswith("/.well-known/"):
         return _http(404, {"error": "not_found"})
+    if path.rstrip("/") == "/health":
+        return _health()
 
     if not _authorized(headers):
         return _http(401, {"error": "unauthorized"})
