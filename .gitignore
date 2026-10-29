@@ -1,0 +1,5 @@
+template.json
+template.min.json
+__pycache__/
+*.pyc
+.env
